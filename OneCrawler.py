@@ -54,147 +54,179 @@ def getNewest():
     
   return newest
 
-def standardVol(volume):
-    #print volume
-    revolume=re.compile("[0-9]+")
-    newvol= revolume.findall(volume)
-    #print newvol
-    if(newvol.__len__() > 0):
-        volume = "Vol." + newvol[0]
-        #print "new",volume
+def getVol(title):
+    volume = title
+    try:
+        #print volume
+        revolume=re.compile("[0-9]+")
+        newvol= revolume.findall(volume)
+        #print newvol
+        if(newvol.__len__() > 0):
+            volume = newvol[0]
+            #print "new",volume
+    except Exception,e:
+        print e
+        print volume
     return volume
     
   
 def get_data(url):
-  dataList = {}
-  
-  #get the id to identify the data
-  id=get_urlid(url)
-  dataList['id']=id
-  #default volume is None
-  dataList['volume']=None
-  
-  try:
-    #visit url
-    response = requests.get(url)
-
-    #no data or can not reach, just return with id
-    if response.status_code != 200:
-        return dataList
-
-    #parse as html
-    soup = bs4.BeautifulSoup(response.text,"html.parser")
-
-    #title
-    volume=soup.title.string[0:10].split()[0]
-    #process volume
-    volume=standardVol(volume)
-    dataList["volume"] = volume
-    #print dataList["volume"],
+    dataList = {}
     
-    #one statement
-    for meta in soup.select('meta'):
-      if meta.get('name') == 'description':
-        #code mode may crash the statement, please do encode here
-        dataList["content"] = meta.get('content')
-    #print dataList["content"]
-
-    #one image
-    dataList["imgUrl"] = soup.find_all('img')[1]['src']
-
-  except Exception,e:
-    print e
+    #get the id to identify the data
+    id=get_urlid(url)
+    dataList['id']=id
+    #default volume is None
+    dataList['volume']=None
+  
+    try:
+        #visit url
+        response = requests.get(url)
     
-  return dataList
+        #no data or can not reach, just return with id
+        if response.status_code != 200:
+            return dataList
+    
+        #parse as html
+        soup = bs4.BeautifulSoup(response.text,"html.parser")
+    
+        #title
+        title=soup.title.string
+        #get volume number from title
+        volume=getVol(title)
+        dataList["volume"] = volume
+        #print dataList["volume"],
+        
+        #one statement
+        for meta in soup.select('meta'):
+            if meta.get('name') == 'description':
+                #code mode may crash the statement, please do encode here
+                dataList["content"] = meta.get('content')
+        #print dataList["content"]
+    
+        #one image
+        dataList["imgUrl"] = soup.find_all('img')[1]['src']
+
+    except Exception,e:
+        print e
+    
+    return dataList
 
 def loadExist(file):
-  existData=None
-  try:
-    with open(file) as infile:
-      #only read the json string from a file into a python object
-      existData=json.load(infile)
-      #must load the string into a json object
-      existData=json.loads(existData)
-  except Exception,e:
-    return []
-    
-  #get data
-  existData=existData["data"]
-  #print existData
-  
-  return existData
-
-if __name__=='__main__':
-  #print standardVol("VOL.192")
-  #exit(0)
-  
-  #get newest id
-  newest = getNewest()
-  #exit(0)
-  
-  #load exist data in JSON file
-  existData = loadExist('data.txt')
-  
-  #get exist id list
-  existIDs=[]
-  for s in existData:   
-    d=s
-    id=int( d['id'] )
-    existIDs.append(id)
-  
-  print existIDs
-  #existIDs=[]
-  #exit(0)
-  
-  
-  #get url by the id we need
-  urls = get_urls(newest-150,newest,existIDs)
-
-  pool = Pool(4)
-  dataList = []
-
-  start = time.time()
-  dataList = pool.map(get_data, urls)
-  end = time.time()
-  
-  #log the number
-  oldnumber=existData.__len__()
-  newnumber = dataList.__len__()
-    
-  #combine data
-  existData.extend(dataList)  
-  
-  #if new data, sort them
-  if(newnumber > 0):
-      #sort by the id aka volume in ascending order
-      existData.sort(lambda x,y: cmp(x['volume'],y['volume']))
-  
-  #update dump file only when we have new data
-  if(newnumber > 0):
+    existData=None
+    try:
+        with open(file) as infile:
+            #only read the json string from a file into a python object
+            existData=json.load(infile)
+            #must load the string into a json object
+            existData=json.loads(existData)
+    except Exception,e:
+        return []
         
-    #dump the object into json string
-    jsonData = json.dumps({'data':existData})
-    #print jsonData
+    #get data
+    existData=existData["data"]
+    #print existData
     
-    #dump the json string into file
-    with open('data.txt', 'w') as outfile:
-      json.dump(jsonData, outfile)
-      
-  #print to read
-  for data in existData:
-    if(data.has_key("content")):
-        #code mode may crash the statement, please do encode here
-        try:
-          print data['id'].encode("utf-8"), 
-          print data["volume"].encode("utf-8"),
-          #print data["content"].encode('utf-8')
-          print data["content"].encode('GB18030')
-        except Exception, e:
-          print "ERROR"
-          #exit(0)
+    return existData
+
+  
+def mysort(x,y):
+    a=x['volume']
+    b=y['volume']
+    try:
+        if(a):
+            a=int(a)
+        if(b):
+            b=int(b)
+    except Exception,e:
+        print e
+        print a,b
+        
+    return - cmp(a,b)
+  
+if __name__=='__main__':
+    #print standardVol("VOL.192")
+    #exit(0)
+    
+    #get newest id
+    newest = getNewest()
+    #exit(0)
+    
+    #load exist data in JSON file
+    existData = loadExist('data.txt')
+    
+    #get exist id list
+    existIDs=[]
+    for s in existData:   
+        d=s
+        id=int( d['id'] )
+        existIDs.append(id)
+    
+    print existIDs
+    #existIDs=[]
+    #exit(0)
+    
+    
+    #get url by the id we need
+    urls = get_urls(newest-800,newest,existIDs)
+    
+    pool = Pool(5)
+    dataList = []
+    
+    start = time.time()
+    dataList = pool.map(get_data, urls)
+    #dataList=[]
+    end = time.time()
+    
+    #log the number
+    oldnumber=existData.__len__()
+    newnumber = dataList.__len__()
+        
+    #combine data
+    existData.extend(dataList)  
+    
+    #if new data, sort them
+    if(newnumber > 0):
+        #sort by the id aka volume in ascending order
+        existData.sort(lambda x,y: mysort(x,y))
+    
+    #update dump file only when we have new data
+    if(newnumber > 0):
+            
+        #dump the object into json string
+        jsonData = json.dumps({'data':existData})
+        #print jsonData
+        
+        #dump the json string into file
+        with open('data.txt', 'w') as outfile:
+            json.dump(jsonData, outfile)
+        
+        
+    print 'use: %.2f s' % (end - start)
+    print "exist data number: %d" % (oldnumber)
+    print "found new data number: %d" %(newnumber)
+    
+    count=0
+    
+    #print to read
+    for data in existData:
+        if(data.has_key("content")):
+            #code mode may crash the statement, please do encode here
+            try:
+                print data['id'].encode("utf-8"), 
+                print "Vol.", data["volume"].encode("utf-8"),
+                #print data["content"].encode('utf-8')
+                print data["content"]
+                #.encode('GB18030')
+                
+                count+=1
+                if(count>=10):
+                    raw_input()
+                    count=0
+            except Exception, e:
+                print "ERROR"
+                #exit(0)
      
-  print 'use: %.2f s' % (end - start)
-  print "exist data number: %d" % (oldnumber)
-  print "found new data number: %d" %(newnumber)
+
   
   
