@@ -13,46 +13,43 @@ import json
 import io
  
 root_url = 'http://wufazhuce.com'
+cacheFile = "Cache"
+outputFile = "One.txt"
+retry = False
+clean = False
  
 def get_url(num):
     return root_url + '/one/' + str(num)
 
 #we can filter the data already existed
-def get_urls(begin,end,filter):
-  newIDs=[]
-  for i in range(begin,end+1):
-    if(i in filter):
-      continue
-    else:
-      newIDs.append(i)
-  
-  urls = map(get_url, newIDs)
-  return urls
+def get_urls(ids): 
+    urls = map(get_url, ids)
+    return urls
   
 def get_urlid(url):
-  substr=url.split('/')
-  return substr[-1]
+    substr=url.split('/')
+    return substr[-1]
 
 def getNewest():
-  url_home="http://wufazhuce.com/"
-  response=requests.get(url_home)
-  soup=bs4.BeautifulSoup(response.text, "html.parser")
+    url_home="http://wufazhuce.com/"
+    response=requests.get(url_home)
+    soup=bs4.BeautifulSoup(response.text, "html.parser")
 
-  container=soup.find('div',id="main-container")
-  container=container.find_all('a', href=re.compile("http://wufazhuce.com/one/[0-9]+"))
-  print container
+    container=soup.find('div',id="main-container")
+    container=container.find_all('a', href=re.compile("http://wufazhuce.com/one/[0-9]+"))
+    print container
 
-  newest=0
-  for a in container:
-    idre=re.compile("[0-9]+")
-    id=idre.findall(a.get('href'))
-    print id
-    res= int(id[0])
-    if(res > newest):
-        newest = res
-        print newest
-    
-  return newest
+    newest=0
+    for a in container:
+        idre=re.compile("[0-9]+")
+        id=idre.findall(a.get('href'))
+        print id
+        res= int(id[0])
+        if(res > newest):
+            newest = res
+            print newest
+        
+    return newest
 
 def getVol(title):
     volume = title
@@ -101,11 +98,11 @@ def get_data(url):
         for meta in soup.select('meta'):
             if meta.get('name') == 'description':
                 #code mode may crash the statement, please do encode here
-                dataList["content"] = meta.get('content')
+                dataList["content"] = meta.get('content').strip()
         #print dataList["content"]
     
         #one image
-        dataList["imgUrl"] = soup.find_all('img')[1]['src']
+        dataList["imgUrl"] = soup.find_all('img')[1]['src'].strip()
 
     except Exception,e:
         print e
@@ -145,46 +142,82 @@ def mysort(x,y):
     return - cmp(a,b)
   
 if __name__=='__main__':
-    #print standardVol("VOL.192")
-    #exit(0)
-    
+        
     #get newest id
     newest = getNewest()
-    #exit(0)
+    print "newest one is {0}".format(newest)
     
     #load exist data in JSON file
-    existData = loadExist('data.txt')
+    existData = loadExist(cacheFile)
     
     #get exist id list
     existIDs=[]
     for s in existData:   
         d=s
         id=int( d['id'] )
+
+        #retry if invalid data
+        if(retry):
+            if(d['volume']==None):
+                continue
+        
         existIDs.append(id)
     
-    print existIDs
-    #existIDs=[]
-    #exit(0)
-    
-    
+    #get new pending
+    pendingIDs=[]    
+    for i in range(newest-1500,newest+1):
+        if(i<0):
+            continue
+            
+        if(i in existIDs):
+            continue
+        else:
+            pendingIDs.append(i)
+
+    print pendingIDs
+        
     #get url by the id we need
-    urls = get_urls(newest-800,newest,existIDs)
+    urls = get_urls(pendingIDs)
     
     pool = Pool(5)
     dataList = []
     
+    #run and crawl the data
     start = time.time()
     dataList = pool.map(get_data, urls)
-    #dataList=[]
     end = time.time()
     
     #log the number
     oldnumber=existData.__len__()
     newnumber = dataList.__len__()
-        
-    #combine data
-    existData.extend(dataList)  
     
+    #retry to get the data, so we should drop the old invalid data
+    if(retry):
+        newExistData=[]
+        for data in existData:
+            if(data['volume']==None):
+                continue
+            else:
+                newExistData.append(data)
+        existData = newExistData
+
+    #clean the data, which means drop the duplicate data with same key (id invalid we should retry)
+    if(clean):
+        IDs=[]
+        newExistData=[]
+        for data in existData:
+            if(data['volume']==None):
+                continue
+            elif(data['id'] in IDs):
+                continue
+            else:
+                IDs.append(data['id'])
+                newExistData.append(data)
+        existData = newExistData
+
+    #combine new and old data
+    existData.extend(dataList)  
+ 
     #if new data, sort them
     if(newnumber > 0):
         #sort by the id aka volume in ascending order
@@ -198,7 +231,7 @@ if __name__=='__main__':
         #print jsonData
         
         #dump the json string into file
-        with open('data.txt', 'w') as outfile:
+        with open(cacheFile, 'w') as outfile:
             json.dump(jsonData, outfile)
         
         
@@ -206,26 +239,28 @@ if __name__=='__main__':
     print "exist data number: %d" % (oldnumber)
     print "found new data number: %d" %(newnumber)
     
-    count=0
-    
-    #print to read
+    '''
+    Output the data into a file.
+    Code mode may crash the statement, please do encode here.
+    '''
+    output = open(outputFile,"w")
     for data in existData:
         if(data.has_key("content")):
-            #code mode may crash the statement, please do encode here
-            try:
-                print data['id'].encode("utf-8"), 
-                print "Vol.", data["volume"].encode("utf-8"),
-                #print data["content"].encode('utf-8')
-                print data["content"]
-                #.encode('GB18030')
+            #try:
+            if(1):
+                id = data['id'].encode("utf-8")
+                vol = "Vol." + data["volume"].encode("utf-8")
+                content = data["content"].encode('GB18030')
+                #content = data["content"].encode('utf-8')
                 
-                count+=1
-                if(count>=10):
-                    raw_input()
-                    count=0
-            except Exception, e:
-                print "ERROR"
-                #exit(0)
+                output.write(vol)
+                output.write("\t")
+                output.write(content)
+                output.write("\n")
+            #except Exception, e:
+            #    print "ERROR"
+
+    output.close()
      
 
   
