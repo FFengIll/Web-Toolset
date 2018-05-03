@@ -20,7 +20,7 @@ python3
 ## CVE Detail
 Crawler for data from [CVE Detail](https://www.cvedetails.com).
 
-## One Crawler
+## One
 It is a python version crawler to crawl the data from [[One·一个]](http://wufazhuce.com/) .
 
 In the crawler, all data will cache into the cache file, so we can update the new datas only; 
@@ -31,7 +31,7 @@ and the human-readable information will output into another file.
 爬虫中有两个相关文件：cache缓存文件用于保存中间数据，确保更新时仅爬取新数据即可；
 output文件用于输出可读信息（该文件每次都会被覆盖重写）。
 
-## UniversityClass
+## Open Class
 Crawler for the class slides from the university share website, like MIT, CMU and so on.
 
 Easy write, easy use.
