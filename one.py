@@ -17,12 +17,13 @@ import logging
 logging.root.setLevel(logging.INFO)
 
 root_url = 'http://wufazhuce.com'
-cache_file = "Cache"
-output_file = "One.txt"
+cache_file = "one.cache"
+output_file = "one.txt"
 default_count = 1000
 pool_num = 5
 retry = 1
 clean = 1
+refresh = 1
 
 
 def get_url(num):
@@ -161,8 +162,12 @@ def output(data):
 
             # Code mode may crash the statement, please do encode here
             content = item.get("content", '')
+            if not content:
+                continue
             content = content.encode('utf-8')
             vol = item.get("volume", '')
+            if not vol:
+                continue
             vol = "vol." + str(vol).encode("utf-8")
 
             fd.write('{}\n{}\n'.format(vol, content))
@@ -193,7 +198,7 @@ def main():
     data.update(new_data)
 
     # update dump file only when we have new data
-    if (newnumber > 0):
+    if newnumber > 0:
         # dump the object into json string
         jsonData = json.dumps(data)
 
@@ -205,8 +210,8 @@ def main():
     logging.info("new data number: {}".format(newnumber))
 
     # Output the data into a file.
-
-    output(data)
+    if newnumber > 0 or refresh:
+        output(data)
 
 
 if __name__ == '__main__':
