@@ -7,7 +7,8 @@ import traceback
 import sh
 import logging
 import os
-
+import json
+from concurrent import futures
 
 console = logging.StreamHandler(sys.stdout)
 console.setLevel(logging.INFO)
@@ -60,30 +61,37 @@ def get_token_info(url):
     # return name.strip().replace(' ',''), address.strip().replace(' ',''), solidity.strip().replace(' ','')
 
 
-def filter_by_name(names):
-    # filter if exist
-    output = sh.ls('ICO').stdout
-
+def filter_by_name(names, exist_name):
     res = set()
+    tmp = set()
+
+    # filter by file stat
+    output = sh.ls('ICO').stdout.decode('utf-8')
     for item in names:
-        item = bytes(item, 'ascii')
         if item in output:
             continue
         else:
+            tmp.add(item)
+
+    # filter by history
+    for item in tmp:
+        found = False
+        for e in exist_name:
+            if item in e:
+                found = True
+                break
+        if not found:
             res.add(item)
     return res
 
 
-def filter_by_address(hrefs):
+def filter_by_address(hrefs, exist_addr):
     logging.debug("possible ref no:{}".format(len(hrefs)))
-    # filter if exist
-    output = sh.ls('ICO').stdout
 
     res = set()
     for item in hrefs:
         address = item.split('/').pop()
-        address = bytes(address, 'ascii')
-        if address in output:
+        if address in exist_addr:
             continue
         else:
             res.add(item)
@@ -92,7 +100,7 @@ def filter_by_address(hrefs):
     return res
 
 
-def get_token_url(url):
+def get_token_url(url, exist_addr):
     r = session.get(url)
     table = r.html.find(
         "#ContentPlaceHolder1_divresult > table tbody", first=True)
@@ -104,7 +112,7 @@ def get_token_url(url):
         href = str(href).replace('token', 'address')
         hrefs.add(href)
 
-    hrefs = filter_by_address(hrefs)
+    hrefs = filter_by_address(hrefs, exist_addr)
 
     return hrefs
 
@@ -160,42 +168,62 @@ def get_address(url):
     return address
 
 
-def search_erc20(names):
-    res = []
-    for name in names:
-        name = name.decode()
-        r = session.get('{}{}'.format(search_url, name))
-        if delay:
-            time.sleep(1)
-        url = r.url
-        if 'token' in url:
-            try:
-                address = get_address(url)
-                url = "{}/{}".format(address_url, address)
-                logging.info(url)
-                res.append(url)
-            except:
-                logging.error('error ignore {}'.format(name))
-        else:
-            with open("ICO/{}".format(name), 'w+') as fd:
-                fd.write('')
-                logging.info('ignore {}'.format(name))
+def search_erc20(name):
+    res = None
+
+    r = session.get('{}{}'.format(search_url, name))
+    if delay:
+        time.sleep(1)
+    url = r.url
+    if 'token' in url:
+        try:
+            address = get_address(url)
+            url = "{}/{}".format(address_url, address)
+            logging.info(url)
+            res = url
+        except:
+            logging.error('error ignore {}'.format(name))
+    else:
+        with open("ICO/{}".format(name), 'w+') as fd:
+            fd.write('')
+            logging.info('ignore {}'.format(name))
 
     return res
 
 
-def import_eidoo():
+def import_eidoo(erc20_exist_name):
     logging.info("get eidoo")
     coin_names = get_eidoo_list()
     names = get_valid_name(coin_names)
 
     logging.info("filter eidoo {}".format(len(names)))
-    names = filter_by_name(names)
+    names = filter_by_name(names, erc20_exist_name)
     logging.info("filter eidoo {}".format(len(names)))
 
     logging.info("search url")
-    urls = search_erc20(names)
+    urls = []
+    # for name in names:
+    #     url = search_erc20(name)
+    #     urls.append(url)
+    with futures.ThreadPoolExecutor() as executor:
+        res = executor.map(search_erc20, names)
+        urls = list(res)
     return urls
+
+
+def import_escan(exist_addr):
+    # may multiple page
+    page_no = get_page_no()
+
+    # get all token
+    logging.info('get token list')
+    hrefs = set()
+    for page in range(page_no + 1):
+        token_page_url = "{}?p={}".format(token_url, page)
+        subset = get_token_url(token_page_url, exist_addr)
+        hrefs.update(subset)
+
+    return hrefs
 
 
 def get_valid_name(names):
@@ -224,55 +252,112 @@ def regular_name(path):
 def dump_solidity(url):
     try:
         name, address, solidity = get_token_info(url)
-        filename = '{}.{}.sol'.format(name, address)
-        filename = regular_name(filename)
+        filename = '{}.sol'.format(address)
+        # filename = '{}.{}.sol'.format(name, address)
+        # filename = regular_name(filename)
         with open('ICO/{}'.format(filename), 'w+') as fd:
             fd.write(solidity)
         logging.info("from {} get {}".format(url, name))
+        res = {
+            'address': address,
+            'name': name
+        }
+        return res
     except Exception as e:
         logging.info("from {} failed".format(url, ))
-        traceback.print_exc()
+        # traceback.print_exc()
+    return None
 
 
 def main(args):
     init()
+    try:
+        with open('ICO.json', 'r') as fd:
+            config = json.load(fd)
+    except:
+        config = {
+            'ERC20': [],
+            'ERC721': [],
+        }
+    erc20_exist_addr = set([i['address'] for i in config['ERC20']])
+    erc20_exist_name = set([i['name'] for i in config['ERC20']])
 
+    report_list = []
+
+    def do_dump(url):
+        report = dump_solidity(url)
+        if report:
+            report_list.append(report)
+
+    # get from eidoo
     # import data from eidoo
     if use_eidoo:
-        eidoo_hrefs = import_eidoo()
+        eidoo_hrefs = import_eidoo(erc20_exist_name)
         for item in eidoo_hrefs:
             logging.info(item)
     else:
         eidoo_hrefs = []
-
-    # may multiple page
-    page_no = get_page_no()
-
-    # get all token
-    logging.info('get token list')
-    hrefs = set()
-    for page in range(page_no + 1):
-        token_page_url = "{}?p={}".format(token_url, page)
-        subset = get_token_url(token_page_url)
-        hrefs.update(subset)
-
-    # get code from eidoo
-    hrefs = filter_by_address(hrefs)
+    eidoo_hrefs = filter_by_address(eidoo_hrefs, erc20_exist_addr)
     logging.info('get from eidoo')
-    for url in eidoo_hrefs:
-        dump_solidity(url)
+    # for url in eidoo_hrefs:
+    #     report = dump_solidity(url)
+    #     if report:
+    #         report_list.append(report)
+    with futures.ThreadPoolExecutor() as executor:
+        res = executor.map(do_dump, list(eidoo_hrefs))
 
-    # get code from erc20
-    hrefs = filter_by_address(hrefs)
+    # get from escan
+    escan_hrefs = import_escan(erc20_exist_addr)
+    escan_hrefs = filter_by_address(escan_hrefs, erc20_exist_addr)
     logging.info('get from erc20')
-    for href in hrefs:
-        url = '{}{}'.format(root_url, href)
-        dump_solidity(url)
+    # for url in escan_hrefs:
+    #     report = dump_solidity(url)
+    #     if report:
+    #         report_list.append(report)
+
+    with futures.ThreadPoolExecutor() as executor:
+        res = executor.map(do_dump, list(escan_hrefs))
+
+    # dump
+    with open('ICO.json', 'w') as fd:
+        config['ERC20'] += report_list
+        json.dump(config, fd, indent=4)
+    logging.info('update with: {} ico'.format(len(report_list)))
 
 
 def test_get_token():
     href = "/address/0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac"
     res = get_token_info(href)
+
+
+def test_fix_json():
+    out = sh.ls('ICO').stdout.decode('utf-8')
+    lines = str(out).split('\n')
+    res = []
+    for l in lines:
+        if l.endswith('.sol'):
+            item = l.split('.')
+            addr = item[-2]
+            name = '.'.join(item[:-2])
+            res .append({'address': addr, 'name': name})
+    return res
+
+
+def test_fix_filename():
+    out = sh.ls('ICO').stdout.decode('utf-8')
+    lines = str(out).split('\n')
+    res = []
+    for l in lines:
+        if l.startswith('0x'):
+            continue
+        if l.endswith('.sol'):
+            item = l.split('.')
+            addr = item[-2]
+            name = '.'.join(item[:-2])
+            res .append({'address': addr, 'name': name})
+            sh.mv('ICO/{}'.format(l), 'ICO/{}.sol'.format(addr))
+
+    exit()
 
 
 if __name__ == '__main__':
