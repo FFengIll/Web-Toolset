@@ -1,4 +1,4 @@
-# -*- coding:utf-8 -*-
+# encoding=utf-8
 '''
 Reference: http://python.jobbole.com/84714/
 '''
@@ -26,11 +26,6 @@ clean = 1
 refresh = 1
 
 
-def get_url(num):
-    url = '{}/one/{}'.format(root_url, num)
-    return url
-
-
 def get_new_id():
     response = requests.get(root_url)
     soup = bs4.BeautifulSoup(response.text, "html.parser")
@@ -39,31 +34,29 @@ def get_new_id():
     container = container.find_all(
         'a', href=re.compile("http://wufazhuce.com/one/[0-9]+"))
 
-    newest = 0
+    max_id = 0
     for a in container:
-        idre = re.compile("[0-9]+")
-        id = idre.findall(a.get('href'))
+        id_pattern = re.compile("[0-9]+")
+        match = id_pattern.findall(a.get('href'))
+        if match:
+            id = int(match[0])
+            if (id > max_id):
+                max_id = id
 
-        res = int(id[0])
-        if (res > newest):
-            newest = res
-
-    return newest
+    return max_id
 
 
 def get_vol(title):
-    volume = title
+    volume = None
     try:
         # print volume
-        revolume = re.compile("[0-9]+")
-        newvol = revolume.findall(volume)
-        # print newvol
-        if (newvol.__len__() > 0):
-            volume = newvol[0]
-            # print "new",volume
-    except Exception, e:
-        print e
-        print volume
+        vol_pattern = re.compile("[0-9]+")
+        match = vol_pattern.findall(title)
+        if match:
+            volume = match[0]
+    except Exception as e:
+        traceback.print_exc()
+        logging.error("failed while volume={}".format(volume))
     return volume
 
 
@@ -86,10 +79,8 @@ def get_data(url):
         # parse as html
         soup = bs4.BeautifulSoup(response.text, "html.parser")
 
-        # title
-        title = soup.title.string
-
         # get volume number from title
+        title = soup.title.string
         volume = get_vol(title)
         data["volume"] = volume
 
@@ -102,7 +93,7 @@ def get_data(url):
         # one image
         data["imgUrl"] = soup.find_all('img')[1]['src'].strip()
 
-    except Exception, e:
+    except Exception as e:
         traceback.print_exc()
 
     return data
@@ -110,38 +101,48 @@ def get_data(url):
 
 def load_cache(file):
     try:
-        with open(file) as fp:
+        with open(file, 'r') as fp:
             data = json.load(fp)
-            data = json.loads(data)
-    except Exception, e:
+    except Exception as e:
+        logging.warning('no cache file or get cache error')
         return {}
 
     return data
 
 
+def timer(f):
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        res = f(*args, **kwargs)
+        end = time.time()
+        logging.info("cost {:.5}s to get new data".format(end - start))
+        return res
+
+    return wrapper
+
+
+@timer
 def process_urls(urls):
+    # run and crawl the data
     pool = Pool(pool_num)
 
-    # run and crawl the data
-    start = time.time()
-    dataList = pool.map(get_data, urls)
-    end = time.time()
-    logging.info("cost {}s to get new data".format(end - start))
-
-    dataDict = {}
-    for item in dataList:
-        dataDict[item['id']] = item
-    return dataDict
+    data = {}
+    for item in pool.map(get_data, urls):
+        data[item['id']] = item
+    return data
 
 
-def get_urls(exist_data, newest, count):
+def get_urls(cache, newid, count):
+    def get_url(key):
+        return '{}/one/{}'.format(root_url, key)
+
     pending = []
-    for key in range(newest - count, newest + 1):
+    for key in range(newid - count, newid + 1):
         if key < 0:
             continue
 
-        if str(key) in exist_data:
-            if exist_data[str(key)]['volume']:
+        if str(key) in cache:
+            if cache[str(key)]['volume']:
                 continue
 
         # get url by the id we need
@@ -152,65 +153,58 @@ def get_urls(exist_data, newest, count):
 
 
 def output(data):
-    # sort them into a list
-    data_list = list(data)
-    # sort by the id aka volume in ascending order
-    data_list.sort(key=lambda x: -int(x))
-    with open(output_file, "w") as fd:
-        for key in data_list:
+    with open(output_file, "w+") as fd:
+        # sort by the id aka volume in ascending order
+        keys = list(data.keys())
+        keys.sort(key=lambda x: -int(x))
+        for key in keys:
             item = data[key]
 
             # Code mode may crash the statement, please do encode here
-            content = item.get("content", '')
+            content = item.get("content", None)
             if not content:
                 continue
-            content = content.encode('utf-8')
-            vol = item.get("volume", '')
+            # content = content.encode('utf-8')
+            vol = item.get("volume", None)
             if not vol:
                 continue
-            vol = "vol." + str(vol).encode("utf-8")
+            vol = "vol." + str(vol)
 
             fd.write('{}\n{}\n'.format(vol, content))
 
 
 def main():
     # get newest id
-    newest = get_new_id()
-    logging.info("newest one is {0}".format(newest))
+    newid = get_new_id()
+    logging.info("newest one is {0}".format(newid))
 
     # load exist data in JSON file
-    cache = load_cache(cache_file)
+    cache_data = load_cache(cache_file)
 
     # ready not exist url
-    urls = get_urls(cache, newest, count=default_count)
+    urls = get_urls(cache_data, newid, count=default_count)
     logging.info('urls count: {}'.format(len(urls)))
 
     # get new data
-    new_data = process_urls(urls)
+    data = process_urls(urls)
 
     # log the number
-    oldnumber = len(cache)
-    newnumber = len(new_data)
+    count_old = len(cache_data)
+    count_new = len(data)
+    logging.info("old cache number: {}".format(count_old))
+    logging.info("new data number: {}".format(count_new))
 
-    # retry to get the data, so we should drop the old invalid data
-    data = {}
-    data.update(cache)
-    data.update(new_data)
+    # combine all data
+    data.update(cache_data)
 
     # update dump file only when we have new data
-    if newnumber > 0:
-        # dump the object into json string
-        jsonData = json.dumps(data)
-
-        # dump the json string into file
-        with open(cache_file, 'w') as outfile:
-            json.dump(jsonData, outfile)
-
-    logging.info("old cache number: {}".format(oldnumber))
-    logging.info("new data number: {}".format(newnumber))
+    if count_new > 0:
+        # dump the dict json data into file
+        with open(cache_file, 'w+') as outfile:
+            json.dump(data, outfile, indent=4, ensure_ascii=False)
 
     # Output the data into a file.
-    if newnumber > 0 or refresh:
+    if count_new > 0 or refresh:
         output(data)
 
 
