@@ -24,7 +24,7 @@ def spider_all(url):
     for i in container:
         href = i.get("href")
         target = "{}/{}".format(url, href)
-        print target
+        print(target)
         download(target, filename=href)
 
 

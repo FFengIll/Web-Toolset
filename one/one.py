@@ -13,20 +13,22 @@ import json
 import io
 import traceback
 import logging
+import toml
 
 logging.root.setLevel(logging.INFO)
 
 root_url = 'http://wufazhuce.com'
-cache_file = "one.cache"
+cache_file = "one.json"
+cache_file = "one.toml"
 output_file = "one.txt"
-default_count = 1000
+default_start = 0
 pool_num = 5
 retry = 1
 clean = 1
 refresh = 1
 
 
-def get_new_id():
+def get_newest_id():
     response = requests.get(root_url)
     soup = bs4.BeautifulSoup(response.text, "html.parser")
 
@@ -40,7 +42,7 @@ def get_new_id():
         match = id_pattern.findall(a.get('href'))
         if match:
             id = int(match[0])
-            if (id > max_id):
+            if id > max_id:
                 max_id = id
 
     return max_id
@@ -99,10 +101,10 @@ def get_data(url):
     return data
 
 
-def load_cache(file):
+def load_cache(path):
     try:
-        with open(file, 'r') as fp:
-            data = json.load(fp)
+        with open(path, 'r') as fp:
+            data = toml.load(fp)
     except Exception as e:
         logging.warning('no cache file or get cache error')
         return {}
@@ -132,17 +134,17 @@ def process_urls(urls):
     return data
 
 
-def get_urls(cache, newid, count):
+def get_urls(cache, start, end):
     def get_url(key):
         return '{}/one/{}'.format(root_url, key)
 
     pending = []
-    for key in range(newid - count, newid + 1):
+    for key in range(start, end):
         if key < 0:
             continue
 
         if str(key) in cache:
-            if cache[str(key)]['volume']:
+            if cache[str(key)].get('volume'):
                 continue
 
         # get url by the id we need
@@ -152,12 +154,12 @@ def get_urls(cache, newid, count):
     return pending
 
 
-def output(data):
-    with open(output_file, "w+") as fd:
+def dump(data, path):
+    res = []
+    with open(path, "w+") as fd:
         # sort by the id aka volume in ascending order
-        keys = list(data.keys())
-        keys.sort(key=lambda x: -int(x))
-        for key in keys:
+        keys = list()
+        for key in data.keys():
             item = data[key]
 
             # Code mode may crash the statement, please do encode here
@@ -168,44 +170,47 @@ def output(data):
             vol = item.get("volume", None)
             if not vol:
                 continue
-            vol = "vol." + str(vol)
+            res.append((key, vol, content))
 
-            fd.write('{}\n{}\n'.format(vol, content))
+        res.sort(key=lambda x: -int(x[0]))
+        for key, vol, content in res:
+            fd.write('vol.{}\n{}\n'.format(vol, content))
 
 
 def main():
     # get newest id
-    newid = get_new_id()
+    newid = get_newest_id()
     logging.info("newest one is {0}".format(newid))
 
     # load exist data in JSON file
-    cache_data = load_cache(cache_file)
+    cache = load_cache(cache_file)
 
     # ready not exist url
-    urls = get_urls(cache_data, newid, count=default_count)
-    logging.info('urls count: {}'.format(len(urls)))
+    urls = get_urls(cache, default_start, newid,)
+    logging.info('pending process urls count: {}'.format(len(urls)))
 
     # get new data
     data = process_urls(urls)
 
     # log the number
-    count_old = len(cache_data)
+    count_old = len(cache)
     count_new = len(data)
     logging.info("old cache number: {}".format(count_old))
     logging.info("new data number: {}".format(count_new))
 
     # combine all data
-    data.update(cache_data)
+    data.update(cache)
 
     # update dump file only when we have new data
     if count_new > 0:
         # dump the dict json data into file
         with open(cache_file, 'w+') as outfile:
-            json.dump(data, outfile, indent=4, ensure_ascii=False)
+            toml.dump(data,outfile)
+            # json.dump(data, outfile, indent=4, ensure_ascii=False)
 
     # Output the data into a file.
     if count_new > 0 or refresh:
-        output(data)
+        dump(data,output_file)
 
 
 if __name__ == '__main__':
