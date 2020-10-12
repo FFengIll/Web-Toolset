@@ -10,22 +10,21 @@ import requests
 import bs4
 import time
 import json
+import click
 import io
 import traceback
-import logging
+import loguru
 import toml
 
-logging.root.setLevel(logging.INFO)
+logger = loguru.logger
 
 root_url = 'http://wufazhuce.com'
-cache_file = "one.json"
 cache_file = "one.toml"
 output_file = "one.txt"
 default_start = 0
 pool_num = 5
 retry = 1
 clean = 1
-refresh = 1
 
 
 def get_newest_id():
@@ -58,7 +57,7 @@ def get_vol(title):
             volume = match[0]
     except Exception as e:
         traceback.print_exc()
-        logging.error("failed while volume={}".format(volume))
+        logger.error("failed while volume={}".format(volume))
     return volume
 
 
@@ -106,7 +105,7 @@ def load_cache(path):
         with open(path, 'r') as fp:
             data = toml.load(fp)
     except Exception as e:
-        logging.warning('no cache file or get cache error')
+        logger.warning('no cache file or get cache error')
         return {}
 
     return data
@@ -117,14 +116,14 @@ def timer(f):
         start = time.time()
         res = f(*args, **kwargs)
         end = time.time()
-        logging.info("cost {:.5}s to get new data".format(end - start))
+        logger.info("cost {:.5}s to get new data".format(end - start))
         return res
 
     return wrapper
 
 
 @timer
-def process_urls(urls):
+def get_rsc(urls):
     # run and crawl the data
     pool = Pool(pool_num)
 
@@ -134,22 +133,28 @@ def process_urls(urls):
     return data
 
 
-def get_urls(cache, start, end):
-    def get_url(key):
-        return '{}/one/{}'.format(root_url, key)
+def to_url(key):
+    return '{}/one/{}'.format(root_url, key)
+
+
+def get_keys(start, end, cache, refresh=False):
 
     pending = []
-    for key in range(start, end):
+    # plus 1 to include current end
+    for key in range(start, end + 1):
         if key < 0:
             continue
 
-        if str(key) in cache:
-            if cache[str(key)].get('volume'):
+        key = str(key)
+        if key in cache:
+            if cache[key].get('volume'):
+                continue
+
+            if not refresh:
                 continue
 
         # get url by the id we need
-        url = get_url(key)
-        pending.append(url)
+        pending.append(key)
 
     return pending
 
@@ -177,26 +182,30 @@ def dump(data, path):
             fd.write('vol.{}\n{}\n'.format(vol, content))
 
 
-def main():
+@click.command()
+@click.option('-r', '--refresh', is_flag=True, help='')
+def main(refresh=False):
     # get newest id
     newid = get_newest_id()
-    logging.info("newest one is {0}".format(newid))
+    logger.info("newest one is {0}".format(newid))
 
     # load exist data in JSON file
     cache = load_cache(cache_file)
 
     # ready not exist url
-    urls = get_urls(cache, default_start, newid,)
-    logging.info('pending process urls count: {}'.format(len(urls)))
+    keys = get_keys(default_start, newid, cache, refresh=refresh)
+    logger.info('pending keys: {}', keys)
+    urls = [to_url(key) for key in keys]
+    logger.info('pending process urls count: {}'.format(len(urls)))
 
     # get new data
-    data = process_urls(urls)
+    data = get_rsc(urls)
 
     # log the number
     count_old = len(cache)
     count_new = len(data)
-    logging.info("old cache number: {}".format(count_old))
-    logging.info("new data number: {}".format(count_new))
+    logger.info("old cache number: {}".format(count_old))
+    logger.info("new data number: {}".format(count_new))
 
     # combine all data
     data.update(cache)
@@ -205,12 +214,12 @@ def main():
     if count_new > 0:
         # dump the dict json data into file
         with open(cache_file, 'w+') as outfile:
-            toml.dump(data,outfile)
+            toml.dump(data, outfile)
             # json.dump(data, outfile, indent=4, ensure_ascii=False)
 
     # Output the data into a file.
-    if count_new > 0 or refresh:
-        dump(data,output_file)
+    if count_new > 0:
+        dump(data, output_file)
 
 
 if __name__ == '__main__':
