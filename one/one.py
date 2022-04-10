@@ -10,7 +10,7 @@ import requests
 import bs4
 import time
 import json
-import click
+import typer
 import io
 import traceback
 import loguru
@@ -25,6 +25,8 @@ default_start = 0
 pool_num = 5
 retry = 1
 clean = 1
+
+app = typer.Typer()
 
 
 def get_newest_id():
@@ -182,9 +184,8 @@ def dump(data, path):
             fd.write('vol.{}\n{}\n'.format(vol, content))
 
 
-@click.command()
-@click.option('-r', '--refresh', is_flag=True, help='')
-def main(refresh=False):
+@app.command()
+def main(refresh: bool = typer.Option(False, "-r", "--refresh", is_flag=True, help="")):
     # get newest id
     newid = get_newest_id()
     logger.info("newest one is {0}".format(newid))
@@ -223,4 +224,4 @@ def main(refresh=False):
 
 
 if __name__ == '__main__':
-    main()
+    app()
