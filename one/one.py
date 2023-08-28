@@ -1,25 +1,25 @@
 # encoding=utf-8
-'''
+"""
 Reference: http://python.jobbole.com/84714/
-'''
+"""
 
-import argparse
-import re
-from multiprocessing import Pool
-import requests
-import bs4
-import time
 import json
-import typer
-import io
+import re
+import time
 import traceback
+from multiprocessing import Pool
+from typing import List
+
+import bs4
 import loguru
-import toml
+import pydantic
+import requests
+import typer
 
 logger = loguru.logger
 
-root_url = 'http://wufazhuce.com'
-cache_file = "one.toml"
+root_url = "http://wufazhuce.com"
+cache_file = "one.json"
 output_file = "one.txt"
 default_start = 0
 pool_num = 5
@@ -29,18 +29,26 @@ clean = 1
 app = typer.Typer()
 
 
+class Resource(pydantic.BaseModel):
+    id: int
+    volume: str or None = pydantic.Field(default="")
+    imgUrl: str = pydantic.Field(default="")
+    content: str = pydantic.Field(default="")
+
+
 def get_newest_id():
     response = requests.get(root_url)
     soup = bs4.BeautifulSoup(response.text, "html.parser")
 
-    container = soup.find('div', id="main-container")
+    container = soup.find("div", id="main-container")
     container = container.find_all(
-        'a', href=re.compile("http://wufazhuce.com/one/[0-9]+"))
+        "a", href=re.compile("http://wufazhuce.com/one/[0-9]+")
+    )
 
     max_id = 0
     for a in container:
         id_pattern = re.compile("[0-9]+")
-        match = id_pattern.findall(a.get('href'))
+        match = id_pattern.findall(a.get("href"))
         if match:
             id = int(match[0])
             if id > max_id:
@@ -63,20 +71,19 @@ def get_vol(title):
     return volume
 
 
-def get_data(url):
-    data = {}
-
+def get_data(url) -> Resource:
     # get the id to identify the data
-    id = url.split('/')[-1]
-    data['id'] = id
-    data['volume'] = None
+    id = url.split("/")[-1]
+
+    data = Resource(id=int(id))
+    data.volume = ""
 
     try:
         # visit url
         response = requests.get(url)
 
         # no data or can not reach, just return with id
-        if response.status_code != 200:
+        if not response.ok:
             return data
 
         # parse as html
@@ -85,16 +92,16 @@ def get_data(url):
         # get volume number from title
         title = soup.title.string
         volume = get_vol(title)
-        data["volume"] = volume
+        data.volume = volume
 
         # one statement
-        for meta in soup.select('meta'):
-            if meta.get('name') == 'description':
+        for meta in soup.select("meta"):
+            if meta.get("name") == "description":
                 # code mode may crash the statement, please do encode here
-                data["content"] = meta.get('content').strip()
+                data.content = meta.get("content").strip()
 
         # one image
-        data["imgUrl"] = soup.find_all('img')[1]['src'].strip()
+        data.imgUrl = soup.find_all("img")[1]["src"].strip()
 
     except Exception as e:
         traceback.print_exc()
@@ -102,15 +109,18 @@ def get_data(url):
     return data
 
 
-def load_cache(path):
+def load_cache(path) -> List[Resource]:
     try:
-        with open(path, 'r') as fp:
-            data = toml.load(fp)
-    except Exception as e:
-        logger.warning('no cache file or get cache error')
-        return {}
+        with open(path, "r") as fp:
+            data = json.load(fp)
+            items = []
+            for it in data:
+                items.append(Resource(**it))
+            return items
 
-    return data
+    except Exception as e:
+        logger.warning("no cache file or get cache error")
+        exit(1)
 
 
 def timer(f):
@@ -125,31 +135,38 @@ def timer(f):
 
 
 @timer
-def get_rsc(urls):
+def get_resource(urls) -> List[Resource]:
     # run and crawl the data
     pool = Pool(pool_num)
 
-    data = {}
+    data = []
+    # for u in urls:
+    # item = get_data(u)
+
     for item in pool.map(get_data, urls):
-        data[item['id']] = item
+        if not item:
+            continue
+        item: "Resource"
+        print(item)
+        data.append(item)
     return data
 
 
 def to_url(key):
-    return '{}/one/{}'.format(root_url, key)
+    # http://wufazhuce.com/one/4099
+    return "{}/one/{}".format(root_url, key)
 
 
-def get_keys(start, end, cache, refresh=False):
-
+def get_keys(start, end, cache: List[Resource], refresh=False):
     pending = []
+    existed = {i.id: i for i in cache}
     # plus 1 to include current end
     for key in range(start, end + 1):
         if key < 0:
             continue
 
-        key = str(key)
-        if key in cache:
-            if cache[key].get('volume'):
+        if key in existed:
+            if existed[key].volume:
                 continue
 
             if not refresh:
@@ -161,27 +178,20 @@ def get_keys(start, end, cache, refresh=False):
     return pending
 
 
-def dump(data, path):
-    res = []
+def dump(data: List[Resource], path):
     with open(path, "w+") as fd:
         # sort by the id aka volume in ascending order
-        keys = list()
-        for key in data.keys():
-            item = data[key]
-
+        for item in data:
             # Code mode may crash the statement, please do encode here
-            content = item.get("content", None)
+            content = item.content
             if not content:
                 continue
             # content = content.encode('utf-8')
-            vol = item.get("volume", None)
+            vol = item.volume
             if not vol:
                 continue
-            res.append((key, vol, content))
 
-        res.sort(key=lambda x: -int(x[0]))
-        for key, vol, content in res:
-            fd.write('vol.{}\n{}\n'.format(vol, content))
+            fd.write("vol.{}\n{}\n".format(vol, content))
 
 
 @app.command()
@@ -191,16 +201,17 @@ def main(refresh: bool = typer.Option(False, "-r", "--refresh", is_flag=True, he
     logger.info("newest one is {0}".format(newid))
 
     # load exist data in JSON file
-    cache = load_cache(cache_file)
+    cache: List[Resource] = load_cache(cache_file)
 
     # ready not exist url
     keys = get_keys(default_start, newid, cache, refresh=refresh)
-    logger.info('pending keys: {}', keys)
+    logger.info("pending keys: {}", keys)
     urls = [to_url(key) for key in keys]
-    logger.info('pending process urls count: {}'.format(len(urls)))
+    print(urls)
+    logger.info("pending process urls count: {}".format(len(urls)))
 
     # get new data
-    data = get_rsc(urls)
+    data = get_resource(urls)
 
     # log the number
     count_old = len(cache)
@@ -209,13 +220,16 @@ def main(refresh: bool = typer.Option(False, "-r", "--refresh", is_flag=True, he
     logger.info("new data number: {}".format(count_new))
 
     # combine all data
-    data.update(cache)
+    data.extend(cache)
+
+    data.sort(key=lambda x: x.id, reverse=True)
 
     # update dump file only when we have new data
     if count_new > 0:
         # dump the dict json data into file
-        with open(cache_file, 'w+') as outfile:
-            toml.dump(data, outfile)
+        with open(cache_file, "w+") as outfile:
+            raw = [i.model_dump() for i in data]
+            json.dump(raw, outfile, indent=2, ensure_ascii=False)
             # json.dump(data, outfile, indent=4, ensure_ascii=False)
 
     # Output the data into a file.
@@ -223,5 +237,5 @@ def main(refresh: bool = typer.Option(False, "-r", "--refresh", is_flag=True, he
         dump(data, output_file)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app()
